@@ -5,14 +5,14 @@ After start, smartMon compare selected (smartmon.conf) parameters from smartctl 
 If there are some differences, smartmon log this and run external software.
 
 ### Install/uninstall
-**make install** - put requred files into Your system.
-**make uninstall** - remove program from Your system.
+**make install** - put requred files into Your system.  
+**make uninstall** - remove program from Your system.  
 
 Tip: to change 'root' dir, export **DESTDIR=/some/other/**.
 
 ### How to use
-Install.
-Edit smartmon.conf.
+Install.  
+Edit smartmon.conf.  
 ```
 # example smartmon.conf
 
@@ -30,11 +30,10 @@ params=(
     UDMA_CRC_Error_Count
 )
 ```
-**Usage: smartmon [-s][-e][-h]**
--s silent mode (log to syslogd)
--e allow 'on error' exec
--h this help
+**Usage: smartmon [-s][-e][-h]**  
+-s silent mode (log to syslogd)  
+-e allow 'on error' exec  
+-h this help  
 
-**Example (crontab):**
+**Example (crontab):**  
 ``0 * * * * /usr/sbin/smartmon -s -e``
-
