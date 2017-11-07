@@ -1,0 +1,162 @@
+#!/bin/sh
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+# OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+# IN THE SOFTWARE.
+#
+# Copyright 2017 tobieniepodam@gmail.com
+
+pgname=$(basename "$0")
+pgd=$(dirname "$0")
+
+E_CONFIG_NOT_FOUND=1
+E_CONFIG_ERROR=2
+E_DEVICE_NOT_FOUND=4
+E_SMART_DEVICE_OPEN=8
+E_SMART_DEVICE_SCAN=16
+
+output_buffer=''
+silent_mode=''
+onerror_allow=''
+exit_code=0
+
+
+function output() {
+    local EOL=''
+    test -z "$2" && EOL='\n'
+
+    output_buffer="$output_buffer$1$EOL";
+}
+
+function error_append() {
+    exit_code=$(( exit_code | $1 ))
+}
+
+function onerror_exec() {
+    test -z "$onerror_allow" && return;
+
+    export E_CODE="$exit_code"
+    export E_MESSAGE="$output_buffer"
+    for f in /etc/smartmon/onerror.d/*; do "$f"; done
+}
+
+function quit() {
+    test -z "$1" || exit_code=$1
+
+    test -z "$silent_mode" && {
+        test "$exit_code" -ne '0' && {
+            echo -e "$pgname:\n$output_buffer" >&2;
+        } || {
+            echo -e "$pgname:\n$output_buffer";
+        }
+    } || {
+        output_buffer=${output_buffer//"\n"/' '}
+        test "$exit_code" -ne '0' && {
+            logger -t "$pgname" "[error $exit_code] $output_buffer"
+        } || {
+            logger -t "$pgname" "$output_buffer"
+        }
+    }
+
+    test "$exit_code" -ne '0' && onerror_exec;
+    exit "$exit_code"
+}
+
+
+for opt in "$@"; do
+    test "$opt" = '-s' && { silent_mode='true'; break; };
+done;
+for opt in "$@"; do
+    test "$opt" = '-e' && { onerror_allow='true'; break; };
+done;
+test -z "$silent_mode" && {
+    for opt in "$@"; do
+        test "$opt" = '-s' -o "$opt" = '-e' && continue;
+        output "Usage: $pgname [-s][-e][-h]";
+        output " -s silent mode (log to syslogd)";
+        output " -e allow 'on error' exec";
+        output " -h this help";
+        quit;
+    done;
+}
+
+
+test -f '/etc/smartmon/smartmon.conf' || {
+    output 'ERROR - smartmon.conf not found!';
+    quit $E_CONFIG_NOT_FOUND;
+}
+. /etc/smartmon/smartmon.conf
+
+
+devt_size=${#devt[@]}
+
+test "$devt_size" -eq 0 && {
+    output 'no devices to check, exit.';
+    quit;
+}
+test "$(( $devt_size % 2))" -ne 0 && {
+    output 'ERROR - smartmon.conf - devt array odd!';
+    quit $E_CONFIG_ERROR;
+}
+
+test -z "$silent_mode" && tab='    ' || tab=''
+i=0;
+while test "$i" -lt "$devt_size"; do
+    dev=${devt[$i]};
+    extra=${devt[$i+1]};
+    test -z "$extra" || extra="-d $extra"
+    i=$(( i+2));
+
+    output "$dev " 'true';
+
+    test ! -b "$dev" && {
+        error_append $E_DEVICE_NOT_FOUND
+        output "ERROR - not found!";
+        continue;
+    }
+
+    smartctl=$(smartctl -a $extra $dev 2>/dev/null);
+    smartctl_exit=$?;
+
+    test $(( $smartctl_exit&2 )) -ne 0 && {
+        error_append $E_SMART_DEVICE_OPEN
+        output "ERROR - smartctl can't open it!";
+        continue;
+    }
+
+    SerialNumber=$(echo "$smartctl" | grep 'Serial Number:' | grep -Po '[^\s]+$')
+
+    output "[$SerialNumber]:"
+
+    for param in ${params[@]}; do
+        val=$(echo "$smartctl" | grep -P "\d\s+$param" | grep -Po '\d+$')
+
+        output "${tab}$param=$val " 'true'
+
+        cache_dir="/var/cache/smartmon/$SerialNumber"
+        test ! -d "$cache_dir" && mkdir -p "$cache_dir"
+
+        cache_file="$cache_dir/$param"
+        test -f "$cache_file" && {
+            val_cache=$(cat "$cache_file")
+            val_diff=$(( val - val_cache ))
+        } || {
+            val_diff=0
+        }
+
+        test "$val_diff" -ne 0 && {
+            error_append $E_SMART_DEVICE_SCAN;
+            output "ERROR - diff $val_diff;";
+        } || {
+            output "ok;";
+        }
+
+        echo "$val" > $cache_file;
+    done
+done
+
+quit
